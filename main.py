@@ -17,7 +17,17 @@ except Exception:
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
 FPS = 60
+AUDIO_ENABLED = True    # 排错开关：改成 False 则完全不启动音频（用来确认噪音是不是音频引起）
+_AUDIO_READY = sys.platform != "emscripten"   # 本地直接就绪，网页端等手势
 pygame.init()
+if sys.platform == "emscripten":
+    # 浏览器硬性要求：音频必须由用户手势启动。
+    # 页面一加载就 init 会让 wasm 音频卡进坏状态，全程出静电嗡鸣。
+    # 所以先彻底关掉音频设备，等玩家第一次点击/触摸再开（见 ensure_audio）。
+    try:
+        pygame.mixer.quit()
+    except Exception:
+        pass
 def _make_screen():
     """手机和网页上把 1280x720 的画布撑满屏幕。"""
     mobile = sys.platform == "emscripten" or any(
@@ -195,53 +205,83 @@ def _web_asset_path(name):
     return None
 
 
-def init_music():
-    global MUSIC_OK, BGM_DIR
-    try:
-        if sys.platform == "emscripten":
-            # 网页端不能用 quit 再 init，且 buffer 必须放大，否则 wasm 音频持续欠载出刺耳嗡鸣
-            pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=4096)
-            pygame.mixer.init()
-        else:
-            pygame.mixer.quit()
-            pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
-    except Exception:
-        MUSIC_OK = False
-        return
+def _locate_bgm_dir():
+    global BGM_DIR
     for d in _dir_candidates():
         c = os.path.join(d, "bgm_cache")
         try:
             if os.path.isdir(c) and (os.path.exists(os.path.join(c, "bgm_menu.ogg"))
                                      or os.path.exists(os.path.join(c, "bgm_menu.wav"))):
                 BGM_DIR = c
-                MUSIC_OK = True
-                return
+                return True
         except Exception:
             pass
+    return False
+
+
+def init_music():
+    """只定位音频目录。mixer 的真正启动交给 ensure_audio（等玩家手势）。"""
+    global MUSIC_OK, BGM_DIR
+    if not AUDIO_ENABLED:
+        MUSIC_OK = False
+        return
+    if sys.platform == "emscripten":
+        MUSIC_OK = _locate_bgm_dir()
+        return
     try:
-        base = os.path.dirname(os.path.abspath(__file__))
-        cand = os.path.join(base, "bgm_cache")
-        os.makedirs(cand, exist_ok=True)
+        pygame.mixer.quit()
+        pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
     except Exception:
-        import tempfile
-        cand = os.path.join(tempfile.gettempdir(), "bgm_cache")
+        MUSIC_OK = False
+        return
+    MUSIC_OK = True
+    if not BGM_DIR:
         try:
+            base = os.path.dirname(os.path.abspath(__file__))
+            cand = os.path.join(base, "bgm_cache")
             os.makedirs(cand, exist_ok=True)
         except Exception:
-            MUSIC_OK = False
-            return
-    BGM_DIR = cand
-    MUSIC_OK = True
+            import tempfile
+            cand = os.path.join(tempfile.gettempdir(), "bgm_cache")
+            try:
+                os.makedirs(cand, exist_ok=True)
+            except Exception:
+                MUSIC_OK = False
+                return
+        BGM_DIR = cand
+
+
+def ensure_audio():
+    """玩家第一次点击/触摸后才真正打开音频设备。"""
+    global MUSIC_OK, _AUDIO_READY, _current_track
+    if _AUDIO_READY:
+        return MUSIC_OK
+    _AUDIO_READY = True
+    if not AUDIO_ENABLED:
+        MUSIC_OK = False
+        return False
+    if sys.platform != "emscripten":
+        return MUSIC_OK
+    try:
+        pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=4096)
+        pygame.mixer.init()
+        _current_track = None      # 允许把当前曲目重新播一次
+        MUSIC_OK = bool(BGM_DIR)
+    except Exception:
+        MUSIC_OK = False
+    return MUSIC_OK
 
 
 def play_music(key):
     """切图时换曲；同曲不重播。音频设备不可用时静默跳过。"""
     global _current_track
+    if not _AUDIO_READY:
+        return
+    if key not in MUSIC or not MUSIC_OK:
+        return
     if _current_track == key:
         return
     _current_track = key
-    if not MUSIC_OK or key not in MUSIC:
-        return
     try:
         name = BGM_FILES.get(key, "bgm_other.wav")
         path = _web_asset_path(name)
@@ -5275,7 +5315,7 @@ def get_tinnitus_sound():
     global _tinnitus_sound
     if _tinnitus_sound is not None:
         return _tinnitus_sound
-    if not MUSIC_OK:
+    if not MUSIC_OK or not _AUDIO_READY:
         return None
     try:
         path = _web_asset_path("tinnitus.wav") or os.path.join(BGM_DIR, "tinnitus.wav")
@@ -5303,7 +5343,7 @@ def get_scream_sound():
     global _scream_sound
     if _scream_sound is not None:
         return _scream_sound
-    if not MUSIC_OK:
+    if not MUSIC_OK or not _AUDIO_READY:
         return None
     try:
         path = _web_asset_path("scream.wav") or os.path.join(BGM_DIR, "scream.wav")
@@ -7211,6 +7251,9 @@ async def main():
     while True:
         elapsed += 1.0 / FPS
         for event in pygame.event.get():
+            if not _AUDIO_READY and event.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+                if ensure_audio():
+                    play_music("menu" if state_menu else current)
             if event.type == pygame.QUIT:
                 pygame.quit()
                 return
