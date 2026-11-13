@@ -26,6 +26,19 @@ jobs:
       - name: 构建网页版
         run: python -m pygbag --build ./
 
+      - name: 把 20MB 运行时镜像进站点
+        run: |
+          set -e
+          BASE=https://pygame-web.github.io/cdn
+          for f in 0.9.3/pythons.js 0.9.3/empty.html 0.9.3/empty.ogg                    0.9.3/cpython312/main.js 0.9.3/cpython312/main.data 0.9.3/cpython312/main.wasm                    vtx.js vt/xterm.css vt/xterm.js vt/xterm-addon-image.js ; do
+            mkdir -p "build/web/cdn/$(dirname $f)"
+            echo "==> $f"
+            curl -fsSL --retry 6 --retry-delay 3 "$BASE/$f" -o "build/web/cdn/$f"
+          done
+          test -s build/web/cdn/0.9.3/cpython312/main.wasm
+          test -s build/web/cdn/0.9.3/cpython312/main.data
+          du -sh build/web/cdn
+
       - name: 首次发布到 gh-pages
         uses: peaceiris/actions-gh-pages@v4
         with:
@@ -34,20 +47,20 @@ jobs:
           publish_branch: gh-pages
           force_orphan: true
 
-      - name: 读取 gh-pages 的提交哈希
+      - name: 读取 gh-pages 提交哈希
         run: |
           SHA=$(git ls-remote "https://github.com/${{ github.repository }}" gh-pages | cut -f1)
-          echo "拿到哈希: $SHA"
+          echo "哈希: $SHA"
           echo "GH_SHA=$SHA" >> $GITHUB_ENV
 
-      - name: 换用更快的游戏包源并改中文提示
+      - name: 页面改为走 jsDelivr 并中文化
         env:
           REPO: ${{ github.repository }}
         run: |
-          echo 'aW1wb3J0IG9zLCByZSwgcGF0aGxpYgoKcmVwbyA9IG9zLmVudmlyb24uZ2V0KCJSRVBPIiwgIiIpCnNoYSA9IG9zLmVudmlyb24uZ2V0KCJHSF9TSEEiLCAiIikuc3RyaXAoKQpyb290ID0gcGF0aGxpYi5QYXRoKCJidWlsZC93ZWIiKQppZHggPSByb290IC8gImluZGV4Lmh0bWwiCmlmIG5vdCBpZHguaXNfZmlsZSgpOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiYnVpbGQvd2ViL2luZGV4Lmh0bWwg5LiN5a2Y5Zyo77yM5p6E5bu65Y+v6IO95aSx6LSlIikKCnMgPSBpZHgucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCgojIOWPquWMuemFjee6r+aWh+S7tuWQje+8iOS4jeWQqyAvIOWSjCA677yJ77yM6YG/5YWN6YeN5aSN5rOo5YWlCm0gPSByZS5zZWFyY2gocidwbGF0Zm9ybVwuZm9wZW5cKCIoW14iLzpdK1wudGFyXC5neikiJywgcykKbmFtZSA9IG0uZ3JvdXAoMSkgaWYgbSBlbHNlICIiCnVybCA9ICIiCmlmIG5hbWUgYW5kIHJlcG86CiAgICByZWYgPSBzaGEgaWYgc2hhIGVsc2UgImdoLXBhZ2VzIgogICAgdXJsID0gImh0dHBzOi8vY2RuLmpzZGVsaXZyLm5ldC9naC8lc0Alcy8lcyIgJSAocmVwbywgcmVmLCBuYW1lKQogICAgcyA9IHMucmVwbGFjZSgncGxhdGZvcm0uZm9wZW4oIiVzIicgJSBuYW1lLCAncGxhdGZvcm0uZm9wZW4oIiVzIicgJSB1cmwsIDEpCmVsaWYgbm90IG5hbWU6CiAgICBwcmludCgi6K2m5ZGKOiDpobXpnaLph4zmsqHmnInmib7liLDnm7jlr7not6/lvoTnmoQgdGFyLmd6IOW8leeUqO+8jOW9kuaho+a6kOacquabv+aNoiIpCgpzID0gcmUuc3ViKHIiPHRpdGxlPltePF0qPC90aXRsZT4iLCAiPHRpdGxlPuaJvuWIsE00PC90aXRsZT4iLCBzLCBjb3VudD0xKQpzID0gcy5yZXBsYWNlKCJEb3dubG9hZGluZy4uLiIsICLmraPlnKjliqDovb3jgIrmib7liLBNNOOAi+KApiIpCgppZHgud3JpdGVfdGV4dChzLCBlbmNvZGluZz0idXRmLTgiKQpwcmludCgiYXJjaGl2ZSA6ICVzIiAlIChuYW1lIG9yICJOT1QgRk9VTkQiKSkKcHJpbnQoInVybCAgICAgOiAlcyIgJSAodXJsIG9yICJ1bmNoYW5nZWQiKSkK' | base64 -d > /tmp/post_build3.py
-          python3 /tmp/post_build3.py
+          echo 'aW1wb3J0IG9zLCByZSwgcGF0aGxpYgoKcmVwbyA9IG9zLmVudmlyb24uZ2V0KCJSRVBPIiwgIiIpCnNoYSA9IG9zLmVudmlyb24uZ2V0KCJHSF9TSEEiLCAiIikuc3RyaXAoKQpyb290ID0gcGF0aGxpYi5QYXRoKCJidWlsZC93ZWIiKQppZHggPSByb290IC8gImluZGV4Lmh0bWwiCmlmIG5vdCBpZHguaXNfZmlsZSgpOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiYnVpbGQvd2ViL2luZGV4Lmh0bWwg5LiN5a2Y5ZyoIikKCnMgPSBpZHgucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCmJhc2UgPSAiaHR0cHM6Ly9jZG4uanNkZWxpdnIubmV0L2doLyVzQCVzIiAlIChyZXBvLCBzaGEgaWYgc2hhIGVsc2UgImdoLXBhZ2VzIikKCiMgMSkg5ri45oiP5YyF6LWwIGpzRGVsaXZyCm5hbWUgPSAiIgptID0gcmUuc2VhcmNoKHIncGxhdGZvcm1cLmZvcGVuXCgiKFteIi86XStcLnRhclwuZ3opIicsIHMpCmlmIG06CiAgICBuYW1lID0gbS5ncm91cCgxKQogICAgcyA9IHMucmVwbGFjZSgncGxhdGZvcm0uZm9wZW4oIiVzIicgJSBuYW1lLCAncGxhdGZvcm0uZm9wZW4oIiVzLyVzIicgJSAoYmFzZSwgbmFtZSksIDEpCgojIDIpIFB5dGhvbiDov5DooYzml7bvvIgyME1C77yJ5Lmf6LWwIGpzRGVsaXZy77yM5rqQ5paH5Lu25bey6ZWc5YOP5Yiw5pys5LuT5bqTIGNkbi8g55uu5b2VCnMyLCBuID0gcmUuc3VibihyJ2NkblxzKjpccyoiW14iXSoiJywgJ2NkbiA6ICIlcy9jZG4vMC45LjMvIicgJSBiYXNlLCBzLCBjb3VudD0xKQpwcmludCgiY2RuIOabv+aNouasoeaVsDoiLCBuKQpzID0gczIKCiMgMykg5Lit5paH5qCH6aKYCnMgPSByZS5zdWIociI8dGl0bGU+W148XSo8L3RpdGxlPiIsICI8dGl0bGU+5om+5YiwTTQ8L3RpdGxlPiIsIHMsIGNvdW50PTEpCnMgPSBzLnJlcGxhY2UoIkRvd25sb2FkaW5nLi4uIiwgIuato+WcqOWKoOi9veOAiuaJvuWIsE0044CL4oCmIikKCmlkeC53cml0ZV90ZXh0KHMsIGVuY29kaW5nPSJ1dGYtOCIpCnByaW50KCJhcmNoaXZlIDoiLCBuYW1lIG9yICJOT1QgRk9VTkQiKQpwcmludCgiY2RuIGJhc2U6IiwgYmFzZSArICIvY2RuLzAuOS4zLyIpCg==' | base64 -d > /tmp/post_build4.py
+          python3 /tmp/post_build4.py
 
-      - name: 二次发布（替换后的页面）
+      - name: 二次发布（换源页面）
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
