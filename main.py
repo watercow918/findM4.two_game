@@ -17,6 +17,7 @@ except Exception:
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
 FPS = 60
+SHOW_FPS = True        # 手机上排查卡顿用，稳定后可改 False 关掉
 AUDIO_ENABLED = True    # 排错开关：改成 False 则完全不启动音频（用来确认噪音是不是音频引起）
 _AUDIO_READY = sys.platform != "emscripten"   # 本地直接就绪，网页端等手势
 pygame.init()
@@ -5417,6 +5418,39 @@ def draw_jumpscare(now):
     return True
 
 
+_veil_half = None
+_veil_full = None
+_half_mask_cache = {}
+
+
+def _half_mask(m):
+    """把遮罩缩到一半分辨率后缓存，供半分辨率暗层使用。"""
+    key = (id(m), m.get_width(), m.get_height())
+    c = _half_mask_cache.get(key)
+    if c is None:
+        w = max(1, m.get_width() // 2)
+        h = max(1, m.get_height() // 2)
+        c = pygame.transform.smoothscale(m, (w, h))
+        _half_mask_cache[key] = c
+    return c
+
+
+def _veil_render(color, alpha, holes):
+    """黑暗层：整屏铺一层暗色，再用遮罩把角色附近减掉，露出下面的画面。
+
+    surfaces 全部复用，绝不在这里新建 Surface——手机 wasm 里每帧分配
+    一张全屏 SRCALPHA 是掉帧的主因之一。
+    """
+    global _veil_half
+    if _veil_half is None:
+        _veil_half = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    hv = _veil_half
+    hv.fill((color[0], color[1], color[2], alpha))
+    for m, x, y in holes:
+        hv.blit(m, (int(x), int(y)), special_flags=pygame.BLEND_RGBA_SUB)
+    screen.blit(hv, (0, 0))
+
+
 def get_circle_mask(r):
     if r in _circle_cache:
         return _circle_cache[r]
@@ -7065,15 +7099,10 @@ def draw_boss_veil(st, px, py, ox, oy):
     alpha = int(b["veil"])
     if alpha <= 4:
         return
-    if _boss_veil is None:
-        _boss_veil = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-    veil_surf = _boss_veil
-    veil_surf.fill((3, 3, 5, min(255, alpha)))
     r = 170
-    cm = get_circle_mask(r)
-    veil_surf.blit(cm, (int(px - ox) - r, int(py - oy) - r),
-                   special_flags=pygame.BLEND_RGBA_SUB)
-    screen.blit(veil_surf, (0, 0))
+    _veil_render((3, 3, 5), min(255, alpha), [
+        (get_circle_mask(r), int(px - ox) - r, int(py - oy) - r),
+    ])
 
 
 def draw_boss_hud(st):
@@ -7236,7 +7265,7 @@ async def main():
     elapsed = 0.0
 
     mist = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-    veil_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    # 黑暗层统一走 _veil_render，它内部自建一张复用画布，不再重复分配
 
     def prepare(key, arrive_from=None):
         if key not in states:
@@ -7248,8 +7277,18 @@ async def main():
 
     prepare("东风草原")
 
+    _prev_ticks = pygame.time.get_ticks()
     while True:
-        elapsed += 1.0 / FPS
+        # 用真实时间推进，不再假设每帧固定 1/60 秒。
+        # 掉帧时游戏逻辑、倒计时都按现实时间走，不会被拖慢成 1/3 速。
+        _now_ticks = pygame.time.get_ticks()
+        dt = (_now_ticks - _prev_ticks) / 1000.0
+        _prev_ticks = _now_ticks
+        if dt > 0.05:
+            dt = 0.05        # 封顶，避免卡顿后一帧瞬移穿墙
+        if dt < 0.001:
+            dt = 0.001
+        elapsed += dt
         for event in pygame.event.get():
             if not _AUDIO_READY and event.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
                 if ensure_audio():
@@ -7331,14 +7370,14 @@ async def main():
             continue
 
         if _prologue["active"]:
-            update_prologue(1.0 / FPS)
+            update_prologue(dt)
             draw_prologue()
             clock.tick(FPS)
             await asyncio.sleep(0)
             continue
 
         if _ending["active"]:
-            _ending["t"] += 1.0 / FPS
+            _ending["t"] += dt
             draw_ending()
             clock.tick(FPS)
             await asyncio.sleep(0)
@@ -7369,8 +7408,9 @@ async def main():
         ln = math.hypot(mx, my)
         if ln > 1.0:
             mx, my = mx / ln, my / ln
-        dx = mx * player_speed
-        dy = my * player_speed
+        _spd = player_speed * (dt * FPS)    # 60 帧基准；掉帧时按真实时间补足
+        dx = mx * _spd
+        dy = my * _spd
 
         px, py = st["px"], st["py"]
 
@@ -7453,8 +7493,8 @@ async def main():
                 clear_dialogue()
                 play_music(target)
 
-        update_dialogue(1.0 / FPS)
-        st["dlg_t"] = st.get("dlg_t", 0.0) + 1.0 / FPS
+        update_dialogue(dt)
+        st["dlg_t"] = st.get("dlg_t", 0.0) + dt
         update_level_dialogue(st, current, elapsed)
 
         if st.get("kind") == "depths":
@@ -7470,7 +7510,7 @@ async def main():
                 else:
                     start_bad_short(st)
             if boss is not None and boss["phase"] in ("fight", "good", "bad", "bad0"):
-                update_boss(st, 1.0 / FPS, px, py)
+                update_boss(st, dt, px, py)
 
         ox = max(0, min(MAP_W - SCREEN_WIDTH, int(st["px"] - SCREEN_WIDTH // 2)))
         oy = max(0, min(MAP_H - SCREEN_HEIGHT, int(st["py"] - SCREEN_HEIGHT // 2)))
@@ -7479,8 +7519,17 @@ async def main():
             ox = max(0, min(MAP_W - SCREEN_WIDTH, arena.centerx - SCREEN_WIDTH // 2))
             oy = max(0, min(MAP_H - SCREEN_HEIGHT, arena.top - 80))
 
-        screen.blit(st["sky"], (0, 0))
-        screen.blit(st["surface"], (0, 0), pygame.Rect(ox, oy, SCREEN_WIDTH, SCREEN_HEIGHT))
+        # 地图大图不透明且大于屏幕，会完全盖住天际层：
+        # 原来每帧先贴一遍天空是白费一次整屏拷贝，这里直接跳过。
+        _surf_now = st["surface"]
+        if not (_surf_now is not None
+                and not (_surf_now.get_flags() & pygame.SRCALPHA)
+                and _surf_now.get_width() >= SCREEN_WIDTH
+                and _surf_now.get_height() >= SCREEN_HEIGHT):
+            if st["sky"] is not None:
+                screen.blit(st["sky"], (0, 0))
+        if _surf_now is not None:
+            screen.blit(_surf_now, (0, 0), pygame.Rect(ox, oy, SCREEN_WIDTH, SCREEN_HEIGHT))
 
         if th["mist"]:
             mist.fill((0, 0, 0, 0))
@@ -7549,11 +7598,9 @@ async def main():
             st["veil"] = st["veil"] + (want - st["veil"]) * 0.12
             alpha = int(224 * st["veil"])
             if alpha > 6:
-                veil_surf.fill((5, 6, 11, alpha))
-                veil_surf.blit(get_light_mask(),
-                               (int(px - ox) - LIGHT_R, int(py - oy) - LIGHT_R),
-                               special_flags=pygame.BLEND_RGBA_SUB)
-                screen.blit(veil_surf, (0, 0))
+                _veil_render((5, 6, 11), alpha, [
+                    (get_light_mask(), int(px - ox) - LIGHT_R, int(py - oy) - LIGHT_R),
+                ])
         elif st.get("kind") == "cellar":
             # 一开始近乎全黑：只有玩家脚下一小圈；拿到手电筒后多出一片扇形；
             # 发电机一响，整片泥土才浮出来
@@ -7561,45 +7608,35 @@ async def main():
             st["veil_a"] += (target_a - st["veil_a"]) * 0.06
             alpha = int(st["veil_a"])
             if alpha > 4:
-                veil_surf.fill((4, 5, 7, alpha))
                 r_c = 150 if st["torch"] else 126
-                cm = get_circle_mask(r_c)
-                veil_surf.blit(cm, (int(px - ox) - r_c, int(py - oy) - r_c),
-                               special_flags=pygame.BLEND_RGBA_SUB)
+                holes = [(get_circle_mask(r_c), int(px - ox) - r_c, int(py - oy) - r_c)]
                 if st["torch"]:
                     fx, fy = st["facing"]
                     ang = math.degrees(math.atan2(-fy, fx))
-                    key = int(round(ang / 45.0)) % 8
-                    cone = get_cone_mask(key)
+                    key_c = int(round(ang / 45.0)) % 8
+                    cone = get_cone_mask(key_c)
                     cone_rect = cone.get_rect(center=(int(px - ox), int(py - oy)))
-                    veil_surf.blit(cone, cone_rect.topleft,
-                                   special_flags=pygame.BLEND_RGBA_SUB)
+                    holes.append((cone, cone_rect.topleft[0], cone_rect.topleft[1]))
                 if st["power"]:
                     gx0 = int(st["gen_rect"].centerx - ox)
                     gy0 = int(st["gen_rect"].centery - oy)
-                    gm = get_circle_mask(190)
-                    veil_surf.blit(gm, (gx0 - 190, gy0 - 190),
-                                   special_flags=pygame.BLEND_RGBA_SUB)
-                screen.blit(veil_surf, (0, 0))
+                    holes.append((get_circle_mask(190), gx0 - 190, gy0 - 190))
+                _veil_render((4, 5, 7), alpha, holes)
         elif st.get("kind") == "depths":
             boss_now = st.get("boss")
             if boss_now is None or boss_now["phase"] == "done":
                 st["veil_a"] += (176.0 - st["veil_a"]) * 0.06
                 alpha = int(st["veil_a"])
                 if alpha > 4:
-                    veil_surf.fill((4, 4, 6, alpha))
                     r_c = 152
-                    veil_surf.blit(get_circle_mask(r_c),
-                                   (int(px - ox) - r_c, int(py - oy) - r_c),
-                                   special_flags=pygame.BLEND_RGBA_SUB)
+                    holes = [(get_circle_mask(r_c), int(px - ox) - r_c, int(py - oy) - r_c)]
                     fx, fy = st["facing"]
                     ang = math.degrees(math.atan2(-fy, fx))
                     k2 = int(round(ang / 45.0)) % 8
                     cone = get_cone_mask(k2)
-                    veil_surf.blit(cone,
-                                   cone.get_rect(center=(int(px - ox), int(py - oy))).topleft,
-                                   special_flags=pygame.BLEND_RGBA_SUB)
-                    screen.blit(veil_surf, (0, 0))
+                    cr = cone.get_rect(center=(int(px - ox), int(py - oy)))
+                    holes.append((cone, cr.topleft[0], cr.topleft[1]))
+                    _veil_render((4, 4, 6), alpha, holes)
 
         pygame.draw.circle(screen, PLAYER_COLOR, (int(px - ox), int(py - oy)), player_radius)
         pygame.draw.circle(screen, PLAYER_INNER, (int(px - ox), int(py - oy)), player_radius - 8)
@@ -7632,6 +7669,11 @@ async def main():
             pygame.draw.rect(qp, (10, 10, 12, 140), qp.get_rect(), border_radius=9)
             screen.blit(qp, (14, 66))
             screen.blit(qs, (28, 72))
+
+        if SHOW_FPS:
+            _fps_txt = "FPS %d" % int(clock.get_fps())
+            _fps_s = font_small.render(_fps_txt, True, (255, 240, 200))
+            screen.blit(_fps_s, (SCREEN_WIDTH - _fps_s.get_width() - 12, 10))
 
         draw_touch_ui()
 
