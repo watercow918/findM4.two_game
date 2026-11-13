@@ -7071,18 +7071,23 @@ def draw_boss_body(st, ox, oy, elapsed):
             pygame.draw.circle(screen, (20, 8, 8), (ex, eye_y), 2)
 
 
+_bullet_glow = None
+
+
 def draw_boss_bullets(st, ox, oy):
+    global _bullet_glow
     b = st.get("boss")
     if b is None:
         return
+    if _bullet_glow is None:
+        _bullet_glow = pygame.Surface((48, 48), pygame.SRCALPHA)
+        pygame.draw.circle(_bullet_glow, (150, 30, 30, 60), (24, 24), 22)
     for p in b["bullets"]:
         sx, sy = int(p["x"] - ox), int(p["y"] - oy)
         if -30 < sx < SCREEN_WIDTH + 30 and -30 < sy < SCREEN_HEIGHT + 30:
             pygame.draw.line(screen, (96, 22, 20),
                              (int(sx - p["vx"] * 0.05), int(sy - p["vy"] * 0.05)), (sx, sy), 3)
-            glow = pygame.Surface((48, 48), pygame.SRCALPHA)
-            pygame.draw.circle(glow, (150, 30, 30, 60), (24, 24), 22)
-            screen.blit(glow, (sx - 24, sy - 24))
+            screen.blit(_bullet_glow, (sx - 24, sy - 24))
             pygame.draw.circle(screen, (52, 14, 14), (sx, sy), p["r"] + 3)
             pygame.draw.circle(screen, (198, 62, 54), (sx, sy), p["r"])
             pygame.draw.circle(screen, (246, 190, 170), (sx - 2, sy - 2), max(2, p["r"] // 3))
@@ -7643,8 +7648,10 @@ async def main():
 
         if st.get("kind") == "depths":
             draw_boss_body(st, ox, oy, elapsed)
-            draw_boss_veil(st, px, py, ox, oy)
+            # 弹幕必须画在黑暗层之前：二阶段视野受限时，
+            # 远处弹幕只留一点点暗红微光，出圈就看不见。
             draw_boss_bullets(st, ox, oy)
+            draw_boss_veil(st, px, py, ox, oy)
 
         for p in st["portals"]:
             ex, ey = p["rect"].x - ox, p["rect"].y - oy
