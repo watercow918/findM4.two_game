@@ -1,77 +1,33 @@
-name: 构建网页版并发布
+name: Build Pygbag Web Game
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装 Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: 安装 pygbag
-        run: pip install pygbag==0.9.3
-
-      - name: 构建网页版
-        run: python -m pygbag --build ./
-
-      - name: 把整套运行时镜像进站点
+      - name: Install pygbag
         run: |
-          set -e
-          PYGDIR=$(python3 -c "import pygbag,os;print(os.path.dirname(pygbag.__file__))")
-          mkdir -p build/web/cdn/0.9.3
-          echo "==> 复制 Python 端脚本"
-          cp -r "$PYGDIR/support/." build/web/cdn/0.9.3/
-          rm -rf build/web/cdn/0.9.3/__pycache__
-          find build/web/cdn/0.9.3 -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-          BASE=https://pygame-web.github.io/cdn
-          for f in 0.9.3/pythons.js 0.9.3/pythons.html 0.9.3/empty.html 0.9.3/empty.ogg \
-                   0.9.3/cpython312/main.js 0.9.3/cpython312/main.data 0.9.3/cpython312/main.wasm \
-                   vtx.js vt/xterm.css vt/xterm.js vt/xterm-addon-image.js ; do
-            mkdir -p "build/web/cdn/$(dirname $f)"
-            echo "==> $f"
-            curl -fsSL --retry 6 --retry-delay 3 "$BASE/$f" -o "build/web/cdn/$f" || echo "警告: $f 下载失败"
-          done
-          test -s build/web/cdn/0.9.3/cpython312/main.wasm
-          test -s build/web/cdn/0.9.3/cpythonrc.py
-          du -sh build/web/cdn
+          python -m pip install --upgrade pip
+          pip install pygbag==0.9.3
 
-      - name: 首次发布到 gh-pages
+      - name: Build web game
+        run: python -m pygbag --build .
+
+      - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./build/web
           publish_branch: gh-pages
-          force_orphan: true
-
-      - name: 读取 gh-pages 提交哈希
-        run: |
-          SHA=$(git ls-remote "https://github.com/${{ github.repository }}" gh-pages | cut -f1)
-          echo "哈希: $SHA"
-          echo "GH_SHA=$SHA" >> $GITHUB_ENV
-
-      - name: 页面改为走 jsDelivr 并中文化
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          echo 'aW1wb3J0IG9zLCByZSwgcGF0aGxpYgoKcmVwbyA9IG9zLmVudmlyb24uZ2V0KCJSRVBPIiwgIiIpCnNoYSA9IG9zLmVudmlyb24uZ2V0KCJHSF9TSEEiLCAiIikuc3RyaXAoKQpyb290ID0gcGF0aGxpYi5QYXRoKCJidWlsZC93ZWIiKQppZHggPSByb290IC8gImluZGV4Lmh0bWwiCmlmIG5vdCBpZHguaXNfZmlsZSgpOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiYnVpbGQvd2ViL2luZGV4Lmh0bWwg5LiN5a2Y5ZyoIikKCnMgPSBpZHgucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCmJhc2UgPSAiaHR0cHM6Ly9jZG4uanNkZWxpdnIubmV0L2doLyVzQCVzIiAlIChyZXBvLCBzaGEgaWYgc2hhIGVsc2UgImdoLXBhZ2VzIikKCm5hbWUgPSAiIgptID0gcmUuc2VhcmNoKHIncGxhdGZvcm1cLmZvcGVuXCgiKFteIi86XStcLnRhclwuZ3opIicsIHMpCmlmIG06CiAgICBuYW1lID0gbS5ncm91cCgxKQogICAgcyA9IHMucmVwbGFjZSgncGxhdGZvcm0uZm9wZW4oIiVzIicgJSBuYW1lLCAncGxhdGZvcm0uZm9wZW4oIiVzLyVzIicgJSAoYmFzZSwgbmFtZSksIDEpCgpzLCBuID0gcmUuc3VibihyJ2NkblxzKjpccyoiW14iXSoiJywgJ2NkbiA6ICIlcy9jZG4vMC45LjMvIicgJSBiYXNlLCBzLCBjb3VudD0xKQpwcmludCgiY2RuIOabv+aNojoiLCBuKQpzID0gcmUuc3ViKHIiPHRpdGxlPltePF0qPC90aXRsZT4iLCAiPHRpdGxlPuaJvuWIsE00PC90aXRsZT4iLCBzLCBjb3VudD0xKQpzID0gcy5yZXBsYWNlKCJEb3dubG9hZGluZy4uLiIsICLmraPlnKjliqDovb3jgIrmib7liLBNNOOAi+KApiIpCgppZHgud3JpdGVfdGV4dChzLCBlbmNvZGluZz0idXRmLTgiKQpwcmludCgiYXJjaGl2ZSA6IiwgbmFtZSBvciAiTk9UIEZPVU5EIikKcHJpbnQoImNkbiAgICAgOiIsIGJhc2UgKyAiL2Nkbi8wLjkuMy8iKQo=' | base64 -d > /tmp/post_build4.py
-          python3 /tmp/post_build4.py
-
-      - name: 二次发布（换源页面）
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./build/web
-          publish_branch: gh-pages
-          force_orphan: true
