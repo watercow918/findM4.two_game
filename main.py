@@ -198,10 +198,12 @@ def _web_asset_path(name):
 def init_music():
     global MUSIC_OK, BGM_DIR
     try:
-        pygame.mixer.quit()
         if sys.platform == "emscripten":
-            pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+            # 网页端不能用 quit 再 init，且 buffer 必须放大，否则 wasm 音频持续欠载出刺耳嗡鸣
+            pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=4096)
+            pygame.mixer.init()
         else:
+            pygame.mixer.quit()
             pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=512)
     except Exception:
         MUSIC_OK = False
