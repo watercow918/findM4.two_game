@@ -8,6 +8,7 @@ import base64
 import random
 import math
 import array
+import gc
 try:
     import wave          # 浏览器(wasm)里 audioop 可能缺失，缺了就不写 wav，用预置 ogg
 except Exception:
@@ -16,8 +17,19 @@ except Exception:
 # ===================== 基础配置 =====================
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
-FPS = 60
-SHOW_FPS = True        # 手机上排查卡顿用，稳定后可改 False 关掉
+# ---- 手机端自动减负：检测到手机浏览器就降到 30 帧、关掉帧率数字 ----
+IS_MOBILE = False
+if sys.platform == "emscripten":
+    try:
+        import platform as _pf
+        _ua = str(_pf.window.navigator.userAgent).lower()
+        IS_MOBILE = any(k in _ua for k in ("mobile", "android", "iphone", "ipad"))
+    except Exception:
+        IS_MOBILE = False
+
+# wasm 是单线程，手机跑 60 帧太吃力；dt 已按真实时间归一，降帧不会让游戏变慢
+FPS = 30 if IS_MOBILE else 60
+SHOW_FPS = not IS_MOBILE        # 手机上不显示右上角帧率数字
 AUDIO_ENABLED = True    # 排错开关：改成 False 则完全不启动音频（用来确认噪音是不是音频引起）
 _AUDIO_READY = sys.platform != "emscripten"   # 本地直接就绪，网页端等手势
 pygame.init()
@@ -5451,6 +5463,55 @@ def _veil_render(color, alpha, holes):
     screen.blit(hv, (0, 0))
 
 
+PLAYER_SPR_W = 40
+PLAYER_SPR_H = 52
+_player_spr = {}
+
+
+def _build_player_sprite(front, step):
+    """俯视游戏里的玩家：一个苍白的、没有脸的小人。
+
+    front=True 面朝下（看正面），False 面朝上（只看得到后脑）。
+    step=True 走路帧，手脚前后错开，形成最简的踏步动作。
+    """
+    w, h, cx = PLAYER_SPR_W, PLAYER_SPR_H, PLAYER_SPR_W // 2
+    s = pygame.Surface((w, h), pygame.SRCALPHA)
+    skin = (250, 245, 232)
+    cloth = (206, 199, 180)
+    limb = (230, 222, 202)
+    edge = (52, 48, 42)
+    hair = (74, 68, 58)
+    sw = 3 if step else 0
+    # 腿
+    pygame.draw.rect(s, edge, (cx - 7 - sw, 36, 7, 14), border_radius=3)
+    pygame.draw.rect(s, limb, (cx - 6 - sw, 37, 5, 12), border_radius=3)
+    pygame.draw.rect(s, edge, (cx + 1 + sw, 36, 7, 14), border_radius=3)
+    pygame.draw.rect(s, limb, (cx + 1 + sw, 37, 5, 12), border_radius=3)
+    # 躯干
+    pygame.draw.ellipse(s, edge, (cx - 11, 20, 22, 20))
+    pygame.draw.ellipse(s, cloth, (cx - 9, 21, 18, 18))
+    # 双臂
+    pygame.draw.ellipse(s, edge, (cx - 13, 23 - sw, 6, 13))
+    pygame.draw.ellipse(s, limb, (cx - 12, 24 - sw, 4, 11))
+    pygame.draw.ellipse(s, edge, (cx + 7, 23 + sw, 6, 13))
+    pygame.draw.ellipse(s, limb, (cx + 8, 24 + sw, 4, 11))
+    # 头
+    pygame.draw.circle(s, edge, (cx, 13), 9)
+    pygame.draw.circle(s, skin, (cx, 13), 7)
+    if not front:
+        pygame.draw.ellipse(s, hair, (cx - 6, 6, 12, 10))
+    return s
+
+
+def get_player_sprite(front, step):
+    key = (bool(front), bool(step))
+    spr = _player_spr.get(key)
+    if spr is None:
+        spr = _build_player_sprite(key[0], key[1])
+        _player_spr[key] = spr
+    return spr
+
+
 def get_circle_mask(r):
     if r in _circle_cache:
         return _circle_cache[r]
@@ -7274,11 +7335,19 @@ async def main():
 
     def prepare(key, arrive_from=None):
         if key not in states:
-            st = create_level(key, arrive_from)
+            states[key] = create_level(key, arrive_from)
+        st = states[key]
+        if st.get("surface") is None:
             st["surface"] = build_surface(st)
+        if st.get("sky") is None:
             st["sky"] = build_sky(key)
-            states[key] = st
-        return states[key]
+        if IS_MOBILE:
+            # 手机内存有限：每张 2400x1600 大图约 15MB，只保留当前场景那张背景
+            for _k, _other in states.items():
+                if _k != key and _other.get("sky") is not None:
+                    _other["sky"] = None
+            gc.collect()
+        return st
 
     prepare("东风草原")
 
@@ -7536,7 +7605,7 @@ async def main():
         if _surf_now is not None:
             screen.blit(_surf_now, (0, 0), pygame.Rect(ox, oy, SCREEN_WIDTH, SCREEN_HEIGHT))
 
-        if th["mist"]:
+        if th["mist"] and not IS_MOBILE:      # 手机端跳过全屏雾效：省一次整屏半透明拷贝
             mist.fill((0, 0, 0, 0))
             for mx, my, mrx, mry in th["mist"]:
                 sx, sy = int(mx - ox * 0.85), int(my - oy * 0.85)
@@ -7544,7 +7613,7 @@ async def main():
                                     pygame.Rect(sx - mrx, sy - mry, mrx * 2, mry * 2))
             screen.blit(mist, (0, 0))
 
-        if st.get("kind") == "water":
+        if st.get("kind") == "water" and not IS_MOBILE:   # 手机端关掉水面闪光
             draw_water_shimmer(ox, oy, elapsed)
 
         for i, (fx, fy) in enumerate(st["flowers"]):
@@ -7643,8 +7712,18 @@ async def main():
                     holes.append((cone, cr.topleft[0], cr.topleft[1]))
                     _veil_render((4, 4, 6), alpha, holes)
 
-        pygame.draw.circle(screen, PLAYER_COLOR, (int(px - ox), int(py - oy)), player_radius)
-        pygame.draw.circle(screen, PLAYER_INNER, (int(px - ox), int(py - oy)), player_radius - 8)
+        # 玩家：无脸小人；上下移动时切换正面/后脑，走路时手脚交替
+        _moving = bool(dx or dy)
+        if _moving:
+            if my > 0.3:
+                st["pf"] = True
+            elif my < -0.3:
+                st["pf"] = False
+        _pfront = st.get("pf", True)
+        _pstep = (int(elapsed * 7) % 2) if _moving else 0
+        _pspr = get_player_sprite(_pfront, _pstep)
+        screen.blit(_pspr, (int(px - ox) - PLAYER_SPR_W // 2,
+                            int(py - oy) - PLAYER_SPR_H // 2))
 
         if st.get("kind") == "depths":
             draw_boss_body(st, ox, oy, elapsed)
