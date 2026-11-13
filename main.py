@@ -5451,6 +5451,55 @@ def _veil_render(color, alpha, holes):
     screen.blit(hv, (0, 0))
 
 
+PLAYER_SPR_W = 40
+PLAYER_SPR_H = 52
+_player_spr = {}
+
+
+def _build_player_sprite(front, step):
+    """俯视游戏里的玩家：一个苍白的、没有脸的小人。
+
+    front=True 面朝下（看正面），False 面朝上（只看得到后脑）。
+    step=True 走路帧，手脚前后错开，形成最简的踏步动作。
+    """
+    w, h, cx = PLAYER_SPR_W, PLAYER_SPR_H, PLAYER_SPR_W // 2
+    s = pygame.Surface((w, h), pygame.SRCALPHA)
+    skin = (250, 245, 232)
+    cloth = (206, 199, 180)
+    limb = (230, 222, 202)
+    edge = (52, 48, 42)
+    hair = (74, 68, 58)
+    sw = 3 if step else 0
+    # 腿
+    pygame.draw.rect(s, edge, (cx - 7 - sw, 36, 7, 14), border_radius=3)
+    pygame.draw.rect(s, limb, (cx - 6 - sw, 37, 5, 12), border_radius=3)
+    pygame.draw.rect(s, edge, (cx + 1 + sw, 36, 7, 14), border_radius=3)
+    pygame.draw.rect(s, limb, (cx + 1 + sw, 37, 5, 12), border_radius=3)
+    # 躯干
+    pygame.draw.ellipse(s, edge, (cx - 11, 20, 22, 20))
+    pygame.draw.ellipse(s, cloth, (cx - 9, 21, 18, 18))
+    # 双臂
+    pygame.draw.ellipse(s, edge, (cx - 13, 23 - sw, 6, 13))
+    pygame.draw.ellipse(s, limb, (cx - 12, 24 - sw, 4, 11))
+    pygame.draw.ellipse(s, edge, (cx + 7, 23 + sw, 6, 13))
+    pygame.draw.ellipse(s, limb, (cx + 8, 24 + sw, 4, 11))
+    # 头
+    pygame.draw.circle(s, edge, (cx, 13), 9)
+    pygame.draw.circle(s, skin, (cx, 13), 7)
+    if not front:
+        pygame.draw.ellipse(s, hair, (cx - 6, 6, 12, 10))
+    return s
+
+
+def get_player_sprite(front, step):
+    key = (bool(front), bool(step))
+    spr = _player_spr.get(key)
+    if spr is None:
+        spr = _build_player_sprite(key[0], key[1])
+        _player_spr[key] = spr
+    return spr
+
+
 def get_circle_mask(r):
     if r in _circle_cache:
         return _circle_cache[r]
@@ -7643,8 +7692,18 @@ async def main():
                     holes.append((cone, cr.topleft[0], cr.topleft[1]))
                     _veil_render((4, 4, 6), alpha, holes)
 
-        pygame.draw.circle(screen, PLAYER_COLOR, (int(px - ox), int(py - oy)), player_radius)
-        pygame.draw.circle(screen, PLAYER_INNER, (int(px - ox), int(py - oy)), player_radius - 8)
+        # 玩家：无脸小人；上下移动时切换正面/后脑，走路时手脚交替
+        _moving = bool(dx or dy)
+        if _moving:
+            if my > 0.3:
+                st["pf"] = True
+            elif my < -0.3:
+                st["pf"] = False
+        _pfront = st.get("pf", True)
+        _pstep = (int(elapsed * 7) % 2) if _moving else 0
+        _pspr = get_player_sprite(_pfront, _pstep)
+        screen.blit(_pspr, (int(px - ox) - PLAYER_SPR_W // 2,
+                            int(py - oy) - PLAYER_SPR_H // 2))
 
         if st.get("kind") == "depths":
             draw_boss_body(st, ox, oy, elapsed)
